@@ -1,8 +1,10 @@
+
 name: Build ALISER APK
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -10,54 +12,119 @@ permissions:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 45
 
-      - name: Unpack source ZIP
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Extract source ZIP
         shell: bash
         run: |
           if [ -f "ALISER-Browser-source.zip" ]; then
-            mkdir -p unpacked
-            unzip -q "ALISER-Browser-source.zip" -d unpacked
+            mkdir -p source
+            unzip -oq ALISER-Browser-source.zip -d source
+            echo "ZIP extracted successfully"
+          else
+            echo "ZIP not found. Checking repository files..."
           fi
 
-      - name: Locate Android project
+      - name: Find Android project
         id: project
         shell: bash
         run: |
           if [ -f "settings.gradle.kts" ]; then
-            echo "dir=." >> "$GITHUB_OUTPUT"
-          elif [ -f "unpacked/ALISER-Browser/settings.gradle.kts" ]; then
-            echo "dir=unpacked/ALISER-Browser" >> "$GITHUB_OUTPUT"
-          elif [ -f "ALISER-Browser/settings.gradle.kts" ]; then
-            echo "dir=ALISER-Browser" >> "$GITHUB_OUTPUT"
+            PROJECT="."
           else
-            echo "Android project files not found"
+            SETTINGS=$(find source . -name settings.gradle.kts \
+              -not -path './.git/*' \
+              -not -path './source/.git/*' \
+              -print -quit 2>/dev/null || true)
+
+            if [ -z "$SETTINGS" ]; then
+              echo "ERROR: settings.gradle.kts not found"
+              find . -maxdepth 4 -type f | head -100
+              exit 1
+            fi
+
+            PROJECT=$(dirname "$SETTINGS")
+          fi
+
+          if [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
+            echo "ERROR: Android app module not found"
             exit 1
           fi
 
-      - uses: actions/setup-java@v4
+          echo "Project directory: $PROJECT"
+          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Accept Android licenses
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses || true
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android SDK
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
 
-      - name: Build debug APK
-        run: gradle --no-daemon -p "${{ steps.project.outputs.dir }}" :app:assembleDebug
+      - name: Check project files
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.dir }}
+        run: |
+          echo "Checking ALISER project..."
+          ls -la "$PROJECT_DIR"
+          ls -la "$PROJECT_DIR/app"
 
-      - name: Upload APK artifact
+      - name: Build ALISER Debug APK
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.dir }}
+        run: |
+          gradle --no-daemon \
+            --stacktrace \
+            -p "$PROJECT_DIR" \
+            :app:assembleDebug
+
+      - name: Verify APK
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.dir }}
+        run: |
+          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated"
+            exit 1
+          fi
+
+          echo "APK successfully generated!"
+          ls -lh "$APK"
+
+      - name: Upload ALISER APK
         uses: actions/upload-artifact@v4
         with:
-          name: ALISER-Browser-debug
+          name: ALISER-Browser-APK
           path: ${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+          
