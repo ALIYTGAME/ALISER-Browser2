@@ -1,0 +1,63 @@
+name: Build ALISER APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack source ZIP
+        shell: bash
+        run: |
+          if [ -f "ALISER-Browser-source.zip" ]; then
+            mkdir -p unpacked
+            unzip -q "ALISER-Browser-source.zip" -d unpacked
+          fi
+
+      - name: Locate Android project
+        id: project
+        shell: bash
+        run: |
+          if [ -f "settings.gradle.kts" ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          elif [ -f "unpacked/ALISER-Browser/settings.gradle.kts" ]; then
+            echo "dir=unpacked/ALISER-Browser" >> "$GITHUB_OUTPUT"
+          elif [ -f "ALISER-Browser/settings.gradle.kts" ]; then
+            echo "dir=ALISER-Browser" >> "$GITHUB_OUTPUT"
+          else
+            echo "Android project files not found"
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Build debug APK
+        run: gradle --no-daemon -p "${{ steps.project.outputs.dir }}" :app:assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ALISER-Browser-debug
+          path: ${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
